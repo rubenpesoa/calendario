@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Calendario</title>
+  <script src="https://accounts.google.com/gsi/client" async></script>
   <style>
     :root {
       --bg: #ffffff;
@@ -145,6 +146,35 @@
       display: flex; align-items: center; justify-content: center;
     }
     .theme-btn:hover { background: var(--surface2); }
+
+    /* ── Google Drive button ── */
+    .gd-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      height: 36px;
+      padding: 0 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 600;
+      display: flex; align-items: center; gap: 6px;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+    .gd-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+    .gd-btn:hover { background: var(--surface2); border-color: #4285f4; color: #4285f4; }
+    .gd-btn.connected { border-color: #34a853; color: #34a853; }
+    .gd-btn.connected:hover { background: var(--surface2); border-color: #c0392b; color: #c0392b; }
+
+    /* Indicador de guardado */
+    .gd-saving {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .gd-saving.visible { opacity: 1; }
 
     /* ── Picker (native select) ── */
     .picker-wrap {
@@ -520,6 +550,15 @@
     </div>
     <div class="header-right">
       <button class="today-btn" id="todayBtn">Hoy</button>
+      <button class="gd-btn" id="gdBtn" title="Sincronizar con Google Drive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
+        </svg>
+        <span id="gdLabel">Drive</span>
+      </button>
+      <span class="gd-saving" id="gdSaving">guardando…</span>
       <button class="theme-btn" id="themeBtn">&#127769;</button>
     </div>
   </div>
@@ -626,8 +665,132 @@
     const loadNotes  = () => { try { return JSON.parse(localStorage.getItem(SK))||{}; } catch { return {}; } };
     const saveNotes  = d  => localStorage.setItem(SK, JSON.stringify(d));
     const getNotes   = k  => loadNotes()[k] || [];
-    function addNote(k, txt)  { const d=loadNotes(); (d[k]=d[k]||[]).push(txt.trim()); saveNotes(d); }
-    function delNote(k, i)    { const d=loadNotes(); if(d[k]){d[k].splice(i,1); if(!d[k].length)delete d[k]; saveNotes(d);} }
+    function addNote(k, txt)  { const d=loadNotes(); (d[k]=d[k]||[]).push(txt.trim()); saveNotes(d); gdScheduleSave(); }
+    function delNote(k, i)    { const d=loadNotes(); if(d[k]){d[k].splice(i,1); if(!d[k].length)delete d[k]; saveNotes(d); gdScheduleSave(); } }
+
+    // ── Google Drive Sync ──────────────────────────────────
+    const GD_CLIENT_ID = "38846479758-8va6jk9t9lrvb4oiofl6p7a50ptp6ln8.apps.googleusercontent.com";
+    const GD_SCOPE     = "https://www.googleapis.com/auth/drive.appdata";
+    const GD_FILENAME  = "calendario-notas.json";
+
+    let gdToken  = null;
+    let gdFileId = null;
+    let gdClient = null;
+    let gdTimer  = null;
+
+    // Inicializar cuando la librería GIS esté lista
+    window.addEventListener("load", () => {
+      if (typeof google === "undefined") return;
+      gdClient = google.accounts.oauth2.initTokenClient({
+        client_id: GD_CLIENT_ID,
+        scope: GD_SCOPE,
+        callback: async (resp) => {
+          if (resp.error) { console.warn("GD auth error:", resp.error); return; }
+          gdToken = resp.access_token;
+          gdUpdateBtn(true);
+          await gdSync();
+        }
+      });
+    });
+
+    function gdToggle() {
+      if (!gdClient) return;
+      if (gdToken) {
+        // Desconectar
+        google.accounts.oauth2.revoke(gdToken, () => {});
+        gdToken = null; gdFileId = null;
+        gdUpdateBtn(false);
+      } else {
+        gdClient.requestAccessToken();
+      }
+    }
+
+    function gdUpdateBtn(connected) {
+      const btn = document.getElementById("gdBtn");
+      const lbl = document.getElementById("gdLabel");
+      btn.classList.toggle("connected", connected);
+      lbl.textContent = connected ? "Conectado" : "Drive";
+      btn.title = connected
+        ? "Sincronizado con Google Drive · Click para desconectar"
+        : "Sincronizar notas con Google Drive";
+      btn.querySelector("svg").innerHTML = connected
+        ? `<polyline points="20 6 9 17 4 12"/>`  // checkmark
+        : `<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>`;
+    }
+
+    function gdShowSaving(visible) {
+      document.getElementById("gdSaving").classList.toggle("visible", visible);
+    }
+
+    async function gdFetch(url, opts = {}) {
+      const res = await fetch(url, {
+        ...opts,
+        headers: { Authorization: `Bearer ${gdToken}`, ...(opts.headers || {}) }
+      });
+      if (res.status === 401) { gdToken = null; gdUpdateBtn(false); throw new Error("Token expirado"); }
+      return res;
+    }
+
+    // Cargar notas desde Drive (Drive gana sobre local si el archivo ya existe)
+    async function gdSync() {
+      try {
+        gdShowSaving(true);
+        const res  = await gdFetch(
+          `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${GD_FILENAME}'&fields=files(id)`
+        );
+        const data = await res.json();
+        if (data.files && data.files.length > 0) {
+          gdFileId = data.files[0].id;
+          const fileRes = await gdFetch(
+            `https://www.googleapis.com/drive/v3/files/${gdFileId}?alt=media`
+          );
+          const notes = await fileRes.json();
+          saveNotes(notes);
+          render();
+        } else {
+          await gdSave(); // sube las notas locales como archivo nuevo
+        }
+      } catch(e) { console.warn("gdSync error:", e); }
+      finally    { gdShowSaving(false); }
+    }
+
+    // Guardar notas en Drive
+    async function gdSave() {
+      if (!gdToken) return;
+      try {
+        gdShowSaving(true);
+        const body = JSON.stringify(loadNotes());
+        if (gdFileId) {
+          await gdFetch(
+            `https://www.googleapis.com/upload/drive/v3/files/${gdFileId}?uploadType=media`,
+            { method: "PATCH", headers: { "Content-Type": "application/json" }, body }
+          );
+        } else {
+          const form = new FormData();
+          form.append("metadata", new Blob(
+            [JSON.stringify({ name: GD_FILENAME, parents: ["appDataFolder"] })],
+            { type: "application/json" }
+          ));
+          form.append("file", new Blob([body], { type: "application/json" }));
+          const res  = await gdFetch(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+            { method: "POST", body: form }
+          );
+          const json = await res.json();
+          gdFileId = json.id;
+        }
+      } catch(e) { console.warn("gdSave error:", e); }
+      finally    { gdShowSaving(false); }
+    }
+
+    // Debounce: evita guardar en Drive con cada keystroke
+    function gdScheduleSave() {
+      if (!gdToken) return;
+      clearTimeout(gdTimer);
+      gdTimer = setTimeout(gdSave, 1500);
+    }
+
+    document.getElementById("gdBtn").addEventListener("click", gdToggle);
 
     // ── Helpers ────────────────────────────────────────────
     const MONTHS  = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
