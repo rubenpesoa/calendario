@@ -58,6 +58,17 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* Transición suave de tema — activa sólo durante el cambio */
+    html.theme-switching *,
+    html.theme-switching *::before,
+    html.theme-switching *::after {
+      transition:
+        background-color 0.55s ease,
+        color            0.55s ease,
+        border-color     0.55s ease,
+        box-shadow       0.55s ease !important;
+    }
+
     /* ── Full-viewport layout ── */
     html, body {
       height: 100%;
@@ -866,12 +877,16 @@
 
     // ── Theme ──────────────────────────────────────────────
     const themeBtn=document.getElementById("themeBtn");
-    function applyTheme(dark) {
-      document.documentElement.dataset.theme=dark?"dark":"";
-      themeBtn.textContent=dark?"☀️":"🌙";
-      localStorage.setItem("calendario_tema",dark?"dark":"light");
+    function applyTheme(dark, animate = false) {
+      if (animate) {
+        document.documentElement.classList.add("theme-switching");
+        setTimeout(() => document.documentElement.classList.remove("theme-switching"), 600);
+      }
+      document.documentElement.dataset.theme = dark ? "dark" : "";
+      themeBtn.textContent = dark ? "☀️" : "🌙";
+      localStorage.setItem("calendario_tema", dark ? "dark" : "light");
     }
-    themeBtn.addEventListener("click",()=>applyTheme(document.documentElement.dataset.theme!=="dark"));
+    themeBtn.addEventListener("click", () => applyTheme(document.documentElement.dataset.theme !== "dark", true));
     const sv=localStorage.getItem("calendario_tema");
     if(sv) applyTheme(sv==="dark");
     else if(window.matchMedia("(prefers-color-scheme: dark)").matches) applyTheme(true);
