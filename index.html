@@ -213,13 +213,26 @@
       letter-spacing: 0.06em;
       color: var(--text-muted);
     }
-    .days {
+    /* Wrapper que ocupa el espacio flex y recorta las diapositivas */
+    .days-wrapper {
       flex: 1;
       min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .days {
+      position: absolute;
+      inset: 0;
       display: grid;
       grid-template-columns: repeat(7, 1fr);
       grid-template-rows: repeat(6, 1fr);
     }
+
+    /* Keyframes para el cambio de mes */
+    @keyframes slideInRight  { from { transform: translateX( 100%); } to { transform: translateX(0); } }
+    @keyframes slideInLeft   { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+    @keyframes slideOutLeft  { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+    @keyframes slideOutRight { from { transform: translateX(0); } to { transform: translateX( 100%); } }
     .day {
       border-right: 1px solid var(--border);
       border-bottom: 1px solid var(--border);
@@ -522,7 +535,9 @@
       <div class="weekday">Vie</div>
       <div class="weekday">Sáb</div>
     </div>
-    <div class="days" id="daysGrid"></div>
+    <div class="days-wrapper" id="daysWrapper">
+      <div class="days" id="daysGrid"></div>
+    </div>
   </div>
 
   <!-- Bottom bar: holidays + countdown -->
@@ -780,13 +795,46 @@
       current.year = parseInt(yearSelect.value); render();
     });
 
+    // ── Animated month navigation ──────────────────────────
+    let isAnimating = false;
+
+    function goToMonth(dir) {
+      if (isAnimating) return;
+      isAnimating = true;
+
+      const DURATION = 300; // ms
+      const wrapper  = document.getElementById("daysWrapper");
+      const grid     = document.getElementById("daysGrid");
+
+      // Clonar el grid actual como "diapositiva saliente"
+      const ghost = grid.cloneNode(true);
+      ghost.removeAttribute("id");
+      ghost.style.cssText = "position:absolute;inset:0;z-index:2;pointer-events:none;";
+      wrapper.appendChild(ghost);
+
+      // Actualizar mes y renderizar nuevo contenido
+      if (dir > 0) {
+        current.month++; if(current.month > 11){current.month = 0; current.year++;}
+      } else {
+        current.month--; if(current.month < 0){current.month = 11; current.year--;}
+      }
+      render();
+
+      // Lanzar animaciones
+      const easing = "cubic-bezier(0.4, 0, 0.2, 1)";
+      ghost.style.animation = `${dir > 0 ? "slideOutLeft" : "slideOutRight"} ${DURATION}ms ${easing} forwards`;
+      grid.style.animation  = `${dir > 0 ? "slideInRight" : "slideInLeft"}  ${DURATION}ms ${easing} forwards`;
+
+      setTimeout(() => {
+        ghost.remove();
+        grid.style.animation = "";
+        isAnimating = false;
+      }, DURATION + 20);
+    }
+
     // ── Navigation ─────────────────────────────────────────
-    document.getElementById("prevBtn").addEventListener("click",()=>{
-      current.month--; if(current.month<0){current.month=11;current.year--;} render();
-    });
-    document.getElementById("nextBtn").addEventListener("click",()=>{
-      current.month++; if(current.month>11){current.month=0;current.year++;} render();
-    });
+    document.getElementById("prevBtn").addEventListener("click", () => goToMonth(-1));
+    document.getElementById("nextBtn").addEventListener("click", () => goToMonth( 1));
     document.getElementById("todayBtn").addEventListener("click",()=>{
       current={year:today.getFullYear(),month:today.getMonth()}; render();
     });
@@ -869,9 +917,7 @@
       const dx = e.changedTouches[0].clientX - swipeX;
       const dy = e.changedTouches[0].clientY - swipeY;
       if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        if (dx < 0) { current.month++; if(current.month>11){current.month=0;current.year++;} }
-        else        { current.month--; if(current.month<0) {current.month=11;current.year--;} }
-        render();
+        goToMonth(dx < 0 ? 1 : -1);
       }
     }, { passive: true });
 
