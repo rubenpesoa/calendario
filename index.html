@@ -146,39 +146,54 @@
     }
     .theme-btn:hover { background: var(--surface2); }
 
-    /* ── Google Drive: login button (visible solo cuando se necesita) ── */
+    /* ── Google Drive: botón de conexión (solo visible cuando no hay sesión) ── */
     .login-btn {
-      background: #4285f4;
-      color: white;
-      border: none;
+      background: #fff;
+      color: #3c4043;
+      border: 1px solid #dadce0;
       height: 36px;
-      padding: 0 14px;
+      padding: 0 12px;
       border-radius: 8px;
       cursor: pointer;
       font-size: 0.78rem;
       font-weight: 600;
-      display: flex; align-items: center; gap: 6px;
+      display: flex; align-items: center; gap: 7px;
       white-space: nowrap;
-      transition: background 0.15s;
-      animation: pulse-login 2s ease-in-out infinite;
+      transition: background 0.15s, box-shadow 0.15s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      animation: pulse-login 2.5s ease-in-out infinite;
     }
-    .login-btn:hover { background: #3367d6; animation: none; }
+    [data-theme="dark"] .login-btn {
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border-color: #444;
+    }
+    .login-btn:hover { background: #f8f9fa; box-shadow: 0 2px 6px rgba(0,0,0,0.15); animation: none; }
+    [data-theme="dark"] .login-btn:hover { background: #333; }
     @keyframes pulse-login {
-      0%,100% { box-shadow: 0 0 0 0 rgba(66,133,244,0.4); }
-      50%      { box-shadow: 0 0 0 5px rgba(66,133,244,0); }
+      0%,100% { box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 0 rgba(66,133,244,0.35); }
+      55%      { box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 6px rgba(66,133,244,0); }
     }
 
-    /* Punto de sync (gris=ok, naranja=pendiente, azul=guardando) */
-    .sync-dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      background: transparent;
-      transition: background 0.3s;
+    /* Indicador de sincronización con Drive (texto "Guardando…" / "Guardado ✓") */
+    .sync-status {
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      opacity: 0;
+      max-width: 0;
+      overflow: hidden;
+      transition: opacity 0.4s, max-width 0.4s;
+      pointer-events: none;
     }
-    .sync-dot[data-state="pending"] { background: #f59e0b; }
-    .sync-dot[data-state="saving"]  { background: #3b82f6; }
-    .sync-dot[data-state="synced"]  { background: #22c55e; }
+    .sync-status.visible {
+      opacity: 1;
+      max-width: 110px;
+    }
+    .sync-status.saving { color: #3b82f6; }
+    .sync-status.synced { color: #16a34a; }
+    [data-theme="dark"] .sync-status.synced { color: #4ade80; }
 
     /* ── Picker (native select) ── */
     .picker-wrap {
@@ -564,15 +579,19 @@
     </div>
     <div class="header-right">
       <button class="today-btn" id="todayBtn">Hoy</button>
-      <button class="login-btn" id="gdLoginBtn" style="display:none" title="Iniciar sesión con Google Drive">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
-          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-          <polyline points="10 17 15 12 10 7"/>
-          <line x1="15" y1="12" x2="3" y2="12"/>
+      <button class="login-btn" id="gdLoginBtn" style="display:none" title="Conectar con Google Drive para sincronizar tus notas entre dispositivos">
+        <!-- Logo Google Drive simplificado -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 87.3 78" width="16" height="16">
+          <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+          <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0-1.2 4.5h27.5z" fill="#00ac47"/>
+          <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.5l5.85 11.5z" fill="#ea4335"/>
+          <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+          <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+          <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
         </svg>
-        Iniciar sesión
+        Conectar con Drive
       </button>
-      <span class="sync-dot" id="syncDot"></span>
+      <span class="sync-status" id="syncStatus"></span>
       <button class="theme-btn" id="themeBtn">&#127769;</button>
     </div>
   </div>
@@ -689,9 +708,10 @@
     const GD_SCOPE     = "https://www.googleapis.com/auth/drive.appdata";
     const GD_FILENAME  = "calendario-notas.json";
 
-    let gdToken  = null;
-    let gdFileId = null;
-    let gdTimer  = null;
+    let gdToken        = null;
+    let gdFileId       = null;
+    let gdTimer        = null;
+    let gdSyncHideTimer = null;
 
     const GD_REDIRECT   = "https://rubenpesoa.github.io/calendario/";
     const GD_TOKEN_KEY  = "gd_access_token";
@@ -810,10 +830,19 @@
       });
     }
 
-    // Sync state visual
-    function gdSetSyncState(state) { // 'pending' | 'saving' | 'synced'
-      const dot = document.getElementById("syncDot");
-      if (dot) dot.dataset.state = gdToken ? state : "";
+    // Indicador de sincronización: muestra texto "Guardando…" / "Guardado ✓"
+    function gdSetSyncState(state) { // 'saving' | 'synced' | 'pending'
+      const el = document.getElementById("syncStatus");
+      if (!el || !gdToken) return;
+      clearTimeout(gdSyncHideTimer);
+      if (state === "saving" || state === "pending") {
+        el.textContent = "Guardando\u2026";
+        el.className   = "sync-status visible saving";
+      } else if (state === "synced") {
+        el.textContent = "Guardado \u2713";
+        el.className   = "sync-status visible synced";
+        gdSyncHideTimer = setTimeout(() => { el.className = "sync-status"; }, 3000);
+      }
     }
 
     // Re-sync al volver a la pestaña
