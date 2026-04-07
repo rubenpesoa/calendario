@@ -684,7 +684,8 @@
     let gdFileId = null;
     let gdTimer  = null;
 
-    const GD_REDIRECT = "https://rubenpesoa.github.io/calendario/";
+    const GD_REDIRECT  = "https://rubenpesoa.github.io/calendario/";
+    const GD_TOKEN_KEY = "gd_access_token";
 
     // Si esta pestaña es el popup de retorno, enviar token al opener y cerrar
     (function() {
@@ -700,24 +701,35 @@
     window.addEventListener("message", async (e) => {
       if (e.origin !== "https://rubenpesoa.github.io") return;
       if (e.data?.type === "gd_token") {
-        gdToken = e.data.token;
-        gdUpdateBtn(true);
+        gdSetToken(e.data.token);
         await gdSync();
       }
     });
 
+    function gdSetToken(token) {
+      gdToken = token;
+      if (token) sessionStorage.setItem(GD_TOKEN_KEY, token);
+      else       sessionStorage.removeItem(GD_TOKEN_KEY);
+      gdUpdateBtn(!!token);
+    }
+
+    // Restaurar token de sesión al cargar la página
+    (async function() {
+      const saved = sessionStorage.getItem(GD_TOKEN_KEY);
+      if (saved) { gdSetToken(saved); await gdSync(); }
+    })();
+
     function gdToggle() {
       if (gdToken) {
-        gdToken = null; gdFileId = null;
-        gdUpdateBtn(false);
+        gdSetToken(null); gdFileId = null;
         return;
       }
       const params = new URLSearchParams({
-        client_id:    GD_CLIENT_ID,
-        redirect_uri: GD_REDIRECT,
+        client_id:     GD_CLIENT_ID,
+        redirect_uri:  GD_REDIRECT,
         response_type: "token",
-        scope:        GD_SCOPE,
-        prompt:       "select_account"
+        scope:         GD_SCOPE,
+        prompt:        "select_account"
       });
       window.open(
         `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
@@ -725,6 +737,11 @@
         "width=500,height=600,left=300,top=150"
       );
     }
+
+    // Re-sincronizar cuando la pestaña vuelve a estar activa
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && gdToken) gdSync();
+    });
 
     function gdUpdateBtn(connected) {
       const btn = document.getElementById("gdBtn");
