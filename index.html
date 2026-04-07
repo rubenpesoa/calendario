@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Calendario</title>
-  <script src="https://accounts.google.com/gsi/client" async></script>
   <style>
     :root {
       --bg: #ffffff;
@@ -683,34 +682,48 @@
 
     let gdToken  = null;
     let gdFileId = null;
-    let gdClient = null;
     let gdTimer  = null;
 
-    // Inicializar cuando la librería GIS esté lista
-    window.addEventListener("load", () => {
-      if (typeof google === "undefined") return;
-      gdClient = google.accounts.oauth2.initTokenClient({
-        client_id: GD_CLIENT_ID,
-        scope: GD_SCOPE,
-        callback: async (resp) => {
-          if (resp.error) { console.warn("GD auth error:", resp.error); return; }
-          gdToken = resp.access_token;
-          gdUpdateBtn(true);
-          await gdSync();
-        }
-      });
+    const GD_REDIRECT = "https://rubenpesoa.github.io/calendario/";
+
+    // Si esta pestaña es el popup de retorno, enviar token al opener y cerrar
+    (function() {
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      const token = hash.get("access_token");
+      if (token && window.opener) {
+        window.opener.postMessage({ type: "gd_token", token }, "https://rubenpesoa.github.io");
+        window.close();
+      }
+    })();
+
+    // Recibir token desde el popup
+    window.addEventListener("message", async (e) => {
+      if (e.origin !== "https://rubenpesoa.github.io") return;
+      if (e.data?.type === "gd_token") {
+        gdToken = e.data.token;
+        gdUpdateBtn(true);
+        await gdSync();
+      }
     });
 
     function gdToggle() {
-      if (!gdClient) return;
       if (gdToken) {
-        // Desconectar
-        google.accounts.oauth2.revoke(gdToken, () => {});
         gdToken = null; gdFileId = null;
         gdUpdateBtn(false);
-      } else {
-        gdClient.requestAccessToken();
+        return;
       }
+      const params = new URLSearchParams({
+        client_id:    GD_CLIENT_ID,
+        redirect_uri: GD_REDIRECT,
+        response_type: "token",
+        scope:        GD_SCOPE,
+        prompt:       "select_account"
+      });
+      window.open(
+        `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
+        "gdauth",
+        "width=500,height=600,left=300,top=150"
+      );
     }
 
     function gdUpdateBtn(connected) {
