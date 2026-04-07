@@ -146,28 +146,39 @@
     }
     .theme-btn:hover { background: var(--surface2); }
 
-    /* ── Google Drive button ── */
-    .gd-btn {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
+    /* ── Google Drive: login button (visible solo cuando se necesita) ── */
+    .login-btn {
+      background: #4285f4;
+      color: white;
+      border: none;
       height: 36px;
-      padding: 0 12px;
+      padding: 0 14px;
       border-radius: 8px;
       cursor: pointer;
       font-size: 0.78rem;
       font-weight: 600;
       display: flex; align-items: center; gap: 6px;
-      transition: background 0.15s, border-color 0.15s, color 0.15s;
       white-space: nowrap;
+      transition: background 0.15s;
+      animation: pulse-login 2s ease-in-out infinite;
     }
-    .gd-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
-    .gd-btn:hover { background: var(--surface2); }
-    /* gris = sincronizado */
-    .gd-btn[data-state="synced"]  { color: var(--text-muted); border-color: var(--border); }
-    /* color = pendiente de guardar */
-    .gd-btn[data-state="pending"] { color: #f59e0b; border-color: #f59e0b; }
-    .gd-btn[data-state="saving"]  { color: #3b82f6; border-color: #3b82f6; }
+    .login-btn:hover { background: #3367d6; animation: none; }
+    @keyframes pulse-login {
+      0%,100% { box-shadow: 0 0 0 0 rgba(66,133,244,0.4); }
+      50%      { box-shadow: 0 0 0 5px rgba(66,133,244,0); }
+    }
+
+    /* Punto de sync (gris=ok, naranja=pendiente, azul=guardando) */
+    .sync-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: transparent;
+      transition: background 0.3s;
+    }
+    .sync-dot[data-state="pending"] { background: #f59e0b; }
+    .sync-dot[data-state="saving"]  { background: #3b82f6; }
+    .sync-dot[data-state="synced"]  { background: #22c55e; }
 
     /* ── Picker (native select) ── */
     .picker-wrap {
@@ -522,8 +533,7 @@
       .bottom-section-label { display: none; }
       /* Header compacto en móvil */
       .today-btn { display: none; }
-      #gdLabel   { display: none; }
-      .gd-btn    { padding: 0 8px; }
+      .login-btn { font-size: 0.72rem; padding: 0 8px; gap: 4px; }
       .month-title { gap: 0; }
     }
   </style>
@@ -554,15 +564,15 @@
     </div>
     <div class="header-right">
       <button class="today-btn" id="todayBtn">Hoy</button>
-      <button class="gd-btn" id="gdBtn" title="Sincronizar con Google Drive">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-          <path d="M2 17l10 5 10-5"/>
-          <path d="M2 12l10 5 10-5"/>
+      <button class="login-btn" id="gdLoginBtn" style="display:none" title="Iniciar sesión con Google Drive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
+          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+          <polyline points="10 17 15 12 10 7"/>
+          <line x1="15" y1="12" x2="3" y2="12"/>
         </svg>
-        <span id="gdLabel">Drive</span>
+        Iniciar sesión
       </button>
-      <span class="gd-saving" id="gdSaving">guardando…</span>
+      <span class="sync-dot" id="syncDot"></span>
       <button class="theme-btn" id="themeBtn">&#127769;</button>
     </div>
   </div>
@@ -687,12 +697,16 @@
     const GD_TOKEN_KEY  = "gd_access_token";
     const GD_EXPIRY_KEY = "gd_token_expiry";
 
-    // Si esta pestaña es el popup de retorno, enviar token al opener y cerrar
+    // Si esta pestaña es el popup de retorno, enviar token (o error) al opener y cerrar
     (function() {
-      const hash = new URLSearchParams(window.location.hash.slice(1));
+      const hash  = new URLSearchParams(window.location.hash.slice(1));
       const token = hash.get("access_token");
-      if (token && window.opener) {
-        window.opener.postMessage({ type: "gd_token", token }, "https://rubenpesoa.github.io");
+      const error = hash.get("error");
+      if (window.opener && (token || error)) {
+        window.opener.postMessage(
+          token ? { type: "gd_token", token } : { type: "gd_token_error", error },
+          "https://rubenpesoa.github.io"
+        );
         window.close();
       }
     })();
@@ -716,7 +730,7 @@
         localStorage.removeItem(GD_TOKEN_KEY);
         localStorage.removeItem(GD_EXPIRY_KEY);
       }
-      gdUpdateBtn(!!token);
+      gdUpdateLoginBtn(!!token);
     }
 
     // Restaurar token persistente al cargar
@@ -724,9 +738,18 @@
       const token  = localStorage.getItem(GD_TOKEN_KEY);
       const expiry = parseInt(localStorage.getItem(GD_EXPIRY_KEY) || "0");
       if (token && expiry > Date.now()) {
+        // Token vigente → conectar directamente
         gdToken = token;
-        gdUpdateBtn(true);
+        gdUpdateLoginBtn(true);
         await gdSync();
+      } else if (token) {
+        // Token expirado → intentar reauth silencioso (sin popup visible)
+        const ok = await gdSilentReauth();
+        if (ok) await gdSync();
+        else gdUpdateLoginBtn(false); // mostrar botón de login
+      } else {
+        // Sin token previo → mostrar botón para que el usuario pueda conectar
+        gdUpdateLoginBtn(false);
       }
     })();
 
@@ -749,9 +772,48 @@
       );
     }
 
+    // Reautenticación silenciosa: abre un popup 1x1 invisible con prompt=none.
+    // Devuelve true si se obtuvo un token nuevo, false si el usuario debe hacer login manual.
+    function gdSilentReauth() {
+      return new Promise((resolve) => {
+        const params = new URLSearchParams({
+          client_id:     GD_CLIENT_ID,
+          redirect_uri:  GD_REDIRECT,
+          response_type: "token",
+          scope:         GD_SCOPE,
+          prompt:        "none"
+        });
+        const popup = window.open(
+          `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
+          "gdauth_silent",
+          "width=1,height=1,left=-9999,top=-9999"
+        );
+        const timeout = setTimeout(() => {
+          try { popup && popup.close(); } catch(_) {}
+          window.removeEventListener("message", handler);
+          resolve(false);
+        }, 12000);
+        function handler(e) {
+          if (e.origin !== "https://rubenpesoa.github.io") return;
+          if (e.data?.type === "gd_token") {
+            clearTimeout(timeout);
+            window.removeEventListener("message", handler);
+            gdSetToken(e.data.token);
+            resolve(true);
+          } else if (e.data?.type === "gd_token_error") {
+            clearTimeout(timeout);
+            window.removeEventListener("message", handler);
+            resolve(false);
+          }
+        }
+        window.addEventListener("message", handler);
+      });
+    }
+
     // Sync state visual
     function gdSetSyncState(state) { // 'pending' | 'saving' | 'synced'
-      if (gdToken) document.getElementById("gdBtn").dataset.state = state;
+      const dot = document.getElementById("syncDot");
+      if (dot) dot.dataset.state = gdToken ? state : "";
     }
 
     // Re-sync al volver a la pestaña
@@ -764,17 +826,9 @@
       if (gdToken && !document.hidden) gdSync();
     }, 30000);
 
-    function gdUpdateBtn(connected) {
-      const btn = document.getElementById("gdBtn");
-      const lbl = document.getElementById("gdLabel");
-      lbl.textContent = connected ? "Conectado" : "Drive";
-      btn.title = connected
-        ? "Sincronizado con Google Drive · Click para desconectar"
-        : "Sincronizar notas con Google Drive";
-      btn.querySelector("svg").innerHTML = connected
-        ? `<polyline points="20 6 9 17 4 12"/>`
-        : `<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>`;
-      btn.dataset.state = connected ? "synced" : "";
+    function gdUpdateLoginBtn(connected) {
+      const loginBtn = document.getElementById("gdLoginBtn");
+      if (loginBtn) loginBtn.style.display = connected ? "none" : "";
     }
 
     async function gdFetch(url, opts = {}) {
@@ -782,7 +836,13 @@
         ...opts,
         headers: { Authorization: `Bearer ${gdToken}`, ...(opts.headers || {}) }
       });
-      if (res.status === 401) { gdToken = null; gdUpdateBtn(false); throw new Error("Token expirado"); }
+      if (res.status === 401) {
+        gdToken = null;
+        localStorage.removeItem(GD_TOKEN_KEY);
+        localStorage.removeItem(GD_EXPIRY_KEY);
+        gdSilentReauth().then(ok => { if (!ok) gdUpdateLoginBtn(false); });
+        throw new Error("Token expirado");
+      }
       return res;
     }
 
@@ -845,7 +905,7 @@
       gdTimer = setTimeout(gdSave, 500);
     }
 
-    document.getElementById("gdBtn").addEventListener("click", gdToggle);
+    document.getElementById("gdLoginBtn").addEventListener("click", gdToggle);
 
     // ── Helpers ────────────────────────────────────────────
     const MONTHS  = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
