@@ -162,18 +162,12 @@
       white-space: nowrap;
     }
     .gd-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
-    .gd-btn:hover { background: var(--surface2); border-color: #4285f4; color: #4285f4; }
-    .gd-btn.connected { border-color: #34a853; color: #34a853; }
-    .gd-btn.connected:hover { background: var(--surface2); border-color: #c0392b; color: #c0392b; }
-
-    /* Indicador de guardado */
-    .gd-saving {
-      font-size: 0.68rem;
-      color: var(--text-muted);
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-    .gd-saving.visible { opacity: 1; }
+    .gd-btn:hover { background: var(--surface2); }
+    /* gris = sincronizado */
+    .gd-btn[data-state="synced"]  { color: var(--text-muted); border-color: var(--border); }
+    /* color = pendiente de guardar */
+    .gd-btn[data-state="pending"] { color: #f59e0b; border-color: #f59e0b; }
+    .gd-btn[data-state="saving"]  { color: #3b82f6; border-color: #3b82f6; }
 
     /* ── Picker (native select) ── */
     .picker-wrap {
@@ -513,8 +507,8 @@
 
     /* ── Responsive ── */
     @media (max-width: 520px) {
-      body { padding: 8px 8px 6px; gap: 6px; }
-      .picker-btn { font-size: 1.1rem; }
+      body { padding: 8px 8px 6px; gap: 6px; overflow-x: hidden; }
+      .picker-display { font-size: 1.05rem; }
       .holiday-tag, .note-chip { display: none; }
       .mobile-dot {
         width: 5px; height: 5px; border-radius: 50%;
@@ -522,10 +516,15 @@
       }
       .mobile-dot.note-dot    { background: var(--note-border); }
       .mobile-dot.holiday-dot { background: var(--holiday-dot); }
-      .bottom-bar { padding: 6px 10px; }
+      .bottom-bar { padding: 6px 8px; }
       .divider { display: none; }
       .holiday-pills { display: none; }
       .bottom-section-label { display: none; }
+      /* Header compacto en móvil */
+      .today-btn { display: none; }
+      #gdLabel   { display: none; }
+      .gd-btn    { padding: 0 8px; }
+      .month-title { gap: 0; }
     }
   </style>
 </head>
@@ -672,8 +671,8 @@
     const loadNotes  = () => { try { return JSON.parse(localStorage.getItem(SK))||{}; } catch { return {}; } };
     const saveNotes  = d  => localStorage.setItem(SK, JSON.stringify(d));
     const getNotes   = k  => loadNotes()[k] || [];
-    function addNote(k, txt)  { const d=loadNotes(); (d[k]=d[k]||[]).push(txt.trim()); saveNotes(d); gdScheduleSave(); }
-    function delNote(k, i)    { const d=loadNotes(); if(d[k]){d[k].splice(i,1); if(!d[k].length)delete d[k]; saveNotes(d); gdScheduleSave(); } }
+    function addNote(k, txt)  { const d=loadNotes(); (d[k]=d[k]||[]).push(txt.trim()); saveNotes(d); gdSetSyncState("pending"); gdScheduleSave(); }
+    function delNote(k, i)    { const d=loadNotes(); if(d[k]){d[k].splice(i,1); if(!d[k].length)delete d[k]; saveNotes(d); gdSetSyncState("pending"); gdScheduleSave(); } }
 
     // ── Google Drive Sync ──────────────────────────────────
     const GD_CLIENT_ID = "38846479758-8va6jk9t9lrvb4oiofl6p7a50ptp6ln8.apps.googleusercontent.com";
@@ -684,8 +683,9 @@
     let gdFileId = null;
     let gdTimer  = null;
 
-    const GD_REDIRECT  = "https://rubenpesoa.github.io/calendario/";
-    const GD_TOKEN_KEY = "gd_access_token";
+    const GD_REDIRECT   = "https://rubenpesoa.github.io/calendario/";
+    const GD_TOKEN_KEY  = "gd_access_token";
+    const GD_EXPIRY_KEY = "gd_token_expiry";
 
     // Si esta pestaña es el popup de retorno, enviar token al opener y cerrar
     (function() {
@@ -708,15 +708,26 @@
 
     function gdSetToken(token) {
       gdToken = token;
-      if (token) sessionStorage.setItem(GD_TOKEN_KEY, token);
-      else       sessionStorage.removeItem(GD_TOKEN_KEY);
+      if (token) {
+        const expiry = Date.now() + 55 * 60 * 1000; // tokens duran 1h, usamos 55min
+        localStorage.setItem(GD_TOKEN_KEY,  token);
+        localStorage.setItem(GD_EXPIRY_KEY, expiry.toString());
+      } else {
+        localStorage.removeItem(GD_TOKEN_KEY);
+        localStorage.removeItem(GD_EXPIRY_KEY);
+      }
       gdUpdateBtn(!!token);
     }
 
-    // Restaurar token de sesión al cargar la página
+    // Restaurar token persistente al cargar
     (async function() {
-      const saved = sessionStorage.getItem(GD_TOKEN_KEY);
-      if (saved) { gdSetToken(saved); await gdSync(); }
+      const token  = localStorage.getItem(GD_TOKEN_KEY);
+      const expiry = parseInt(localStorage.getItem(GD_EXPIRY_KEY) || "0");
+      if (token && expiry > Date.now()) {
+        gdToken = token;
+        gdUpdateBtn(true);
+        await gdSync();
+      }
     })();
 
     function gdToggle() {
@@ -738,26 +749,32 @@
       );
     }
 
-    // Re-sincronizar cuando la pestaña vuelve a estar activa
+    // Sync state visual
+    function gdSetSyncState(state) { // 'pending' | 'saving' | 'synced'
+      if (gdToken) document.getElementById("gdBtn").dataset.state = state;
+    }
+
+    // Re-sync al volver a la pestaña
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && gdToken) gdSync();
     });
 
+    // Polling cada 30s — aproxima sync en tiempo real sin backend
+    setInterval(() => {
+      if (gdToken && !document.hidden) gdSync();
+    }, 30000);
+
     function gdUpdateBtn(connected) {
       const btn = document.getElementById("gdBtn");
       const lbl = document.getElementById("gdLabel");
-      btn.classList.toggle("connected", connected);
       lbl.textContent = connected ? "Conectado" : "Drive";
       btn.title = connected
         ? "Sincronizado con Google Drive · Click para desconectar"
         : "Sincronizar notas con Google Drive";
       btn.querySelector("svg").innerHTML = connected
-        ? `<polyline points="20 6 9 17 4 12"/>`  // checkmark
+        ? `<polyline points="20 6 9 17 4 12"/>`
         : `<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>`;
-    }
-
-    function gdShowSaving(visible) {
-      document.getElementById("gdSaving").classList.toggle("visible", visible);
+      btn.dataset.state = connected ? "synced" : "";
     }
 
     async function gdFetch(url, opts = {}) {
@@ -772,7 +789,7 @@
     // Cargar notas desde Drive (Drive gana sobre local si el archivo ya existe)
     async function gdSync() {
       try {
-        gdShowSaving(true);
+        gdSetSyncState("saving");
         const res  = await gdFetch(
           `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${GD_FILENAME}'&fields=files(id)`
         );
@@ -786,17 +803,17 @@
           saveNotes(notes);
           render();
         } else {
-          await gdSave(); // sube las notas locales como archivo nuevo
+          await gdSave();
         }
-      } catch(e) { console.warn("gdSync error:", e); }
-      finally    { gdShowSaving(false); }
+        gdSetSyncState("synced");
+      } catch(e) { console.warn("gdSync error:", e); gdSetSyncState("synced"); }
     }
 
     // Guardar notas en Drive
     async function gdSave() {
       if (!gdToken) return;
       try {
-        gdShowSaving(true);
+        gdSetSyncState("saving");
         const body = JSON.stringify(loadNotes());
         if (gdFileId) {
           await gdFetch(
@@ -817,15 +834,15 @@
           const json = await res.json();
           gdFileId = json.id;
         }
-      } catch(e) { console.warn("gdSave error:", e); }
-      finally    { gdShowSaving(false); }
+        gdSetSyncState("synced");
+      } catch(e) { console.warn("gdSave error:", e); gdSetSyncState("pending"); }
     }
 
-    // Debounce: evita guardar en Drive con cada keystroke
+    // Guarda rápido (500ms debounce para no duplicar llamadas en borrados seguidos)
     function gdScheduleSave() {
       if (!gdToken) return;
       clearTimeout(gdTimer);
-      gdTimer = setTimeout(gdSave, 1500);
+      gdTimer = setTimeout(gdSave, 500);
     }
 
     document.getElementById("gdBtn").addEventListener("click", gdToggle);
