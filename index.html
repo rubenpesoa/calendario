@@ -547,8 +547,11 @@
       .holiday-pills { display: none; }
       .bottom-section-label { display: none; }
       /* Header compacto en móvil */
-      .today-btn { display: none; }
-      .login-btn { font-size: 0.72rem; padding: 0 8px; gap: 4px; }
+      .today-btn  { display: none; }
+      .login-label { display: none; }       /* solo ícono Drive, sin texto */
+      .login-btn  { padding: 0 9px; }
+      .sync-status { display: none; }       /* sin espacio para el indicador */
+      .header-right { gap: 4px; }
       .month-title { gap: 0; }
     }
   </style>
@@ -589,7 +592,7 @@
           <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
           <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
         </svg>
-        Conectar con Drive
+        <span class="login-label">Conectar con Drive</span>
       </button>
       <span class="sync-status" id="syncStatus"></span>
       <button class="theme-btn" id="themeBtn">&#127769;</button>
