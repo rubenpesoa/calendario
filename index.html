@@ -704,48 +704,24 @@
     function delNote(k, i)    { const d=loadNotes(); if(d[k]){d[k].splice(i,1); if(!d[k].length)delete d[k]; saveNotes(d); gdSetSyncState("pending"); gdScheduleSave(); } }
 
     // ── Google Drive Sync ──────────────────────────────────
-    const GD_CLIENT_ID = "38846479758-8va6jk9t9lrvb4oiofl6p7a50ptp6ln8.apps.googleusercontent.com";
-    const GD_SCOPE     = "https://www.googleapis.com/auth/drive.appdata";
-    const GD_FILENAME  = "calendario-notas.json";
-
-    let gdToken        = null;
-    let gdFileId       = null;
-    let gdTimer        = null;
-    let gdSyncHideTimer = null;
-
+    const GD_CLIENT_ID  = "38846479758-8va6jk9t9lrvb4oiofl6p7a50ptp6ln8.apps.googleusercontent.com";
+    const GD_SCOPE      = "https://www.googleapis.com/auth/drive.appdata";
+    const GD_FILENAME   = "calendario-notas.json";
     const GD_REDIRECT   = "https://rubenpesoa.github.io/calendario/";
     const GD_TOKEN_KEY  = "gd_access_token";
     const GD_EXPIRY_KEY = "gd_token_expiry";
 
-    // Si esta pestaña es el popup de retorno, enviar token (o error) al opener y cerrar
-    (function() {
-      const hash  = new URLSearchParams(window.location.hash.slice(1));
-      const token = hash.get("access_token");
-      const error = hash.get("error");
-      if (window.opener && (token || error)) {
-        window.opener.postMessage(
-          token ? { type: "gd_token", token } : { type: "gd_token_error", error },
-          "https://rubenpesoa.github.io"
-        );
-        window.close();
-      }
-    })();
+    let gdToken         = null;
+    let gdFileId        = null;
+    let gdTimer         = null;
+    let gdSyncHideTimer = null;
 
-    // Recibir token desde el popup
-    window.addEventListener("message", async (e) => {
-      if (e.origin !== "https://rubenpesoa.github.io") return;
-      if (e.data?.type === "gd_token") {
-        gdSetToken(e.data.token);
-        await gdSync();
-      }
-    });
-
+    // ── Helpers de sesión ─────────────────────────────────
     function gdSetToken(token) {
       gdToken = token;
       if (token) {
-        const expiry = Date.now() + 55 * 60 * 1000; // tokens duran 1h, usamos 55min
         localStorage.setItem(GD_TOKEN_KEY,  token);
-        localStorage.setItem(GD_EXPIRY_KEY, expiry.toString());
+        localStorage.setItem(GD_EXPIRY_KEY, (Date.now() + 55 * 60 * 1000).toString());
       } else {
         localStorage.removeItem(GD_TOKEN_KEY);
         localStorage.removeItem(GD_EXPIRY_KEY);
@@ -753,85 +729,13 @@
       gdUpdateLoginBtn(!!token);
     }
 
-    // Restaurar token persistente al cargar
-    (async function() {
-      const token  = localStorage.getItem(GD_TOKEN_KEY);
-      const expiry = parseInt(localStorage.getItem(GD_EXPIRY_KEY) || "0");
-      if (token && expiry > Date.now()) {
-        // Token vigente → conectar directamente
-        gdToken = token;
-        gdUpdateLoginBtn(true);
-        await gdSync();
-      } else if (token) {
-        // Token expirado → intentar reauth silencioso (sin popup visible)
-        const ok = await gdSilentReauth();
-        if (ok) await gdSync();
-        else gdUpdateLoginBtn(false); // mostrar botón de login
-      } else {
-        // Sin token previo → mostrar botón para que el usuario pueda conectar
-        gdUpdateLoginBtn(false);
-      }
-    })();
-
-    function gdToggle() {
-      if (gdToken) {
-        gdSetToken(null); gdFileId = null;
-        return;
-      }
-      const params = new URLSearchParams({
-        client_id:     GD_CLIENT_ID,
-        redirect_uri:  GD_REDIRECT,
-        response_type: "token",
-        scope:         GD_SCOPE,
-        prompt:        "select_account"
-      });
-      window.open(
-        `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
-        "gdauth",
-        "width=500,height=600,left=300,top=150"
-      );
+    function gdUpdateLoginBtn(connected) {
+      const btn = document.getElementById("gdLoginBtn");
+      if (btn) btn.style.display = connected ? "none" : "";
     }
 
-    // Reautenticación silenciosa: abre un popup 1x1 invisible con prompt=none.
-    // Devuelve true si se obtuvo un token nuevo, false si el usuario debe hacer login manual.
-    function gdSilentReauth() {
-      return new Promise((resolve) => {
-        const params = new URLSearchParams({
-          client_id:     GD_CLIENT_ID,
-          redirect_uri:  GD_REDIRECT,
-          response_type: "token",
-          scope:         GD_SCOPE,
-          prompt:        "none"
-        });
-        const popup = window.open(
-          `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
-          "gdauth_silent",
-          "width=1,height=1,left=-9999,top=-9999"
-        );
-        const timeout = setTimeout(() => {
-          try { popup && popup.close(); } catch(_) {}
-          window.removeEventListener("message", handler);
-          resolve(false);
-        }, 12000);
-        function handler(e) {
-          if (e.origin !== "https://rubenpesoa.github.io") return;
-          if (e.data?.type === "gd_token") {
-            clearTimeout(timeout);
-            window.removeEventListener("message", handler);
-            gdSetToken(e.data.token);
-            resolve(true);
-          } else if (e.data?.type === "gd_token_error") {
-            clearTimeout(timeout);
-            window.removeEventListener("message", handler);
-            resolve(false);
-          }
-        }
-        window.addEventListener("message", handler);
-      });
-    }
-
-    // Indicador de sincronización: muestra texto "Guardando…" / "Guardado ✓"
-    function gdSetSyncState(state) { // 'saving' | 'synced' | 'pending'
+    // Indicador "Guardando…" / "Guardado ✓"
+    function gdSetSyncState(state) {
       const el = document.getElementById("syncStatus");
       if (!el || !gdToken) return;
       clearTimeout(gdSyncHideTimer);
@@ -845,21 +749,94 @@
       }
     }
 
-    // Re-sync al volver a la pestaña
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && gdToken) gdSync();
-    });
-
-    // Polling cada 30s — aproxima sync en tiempo real sin backend
-    setInterval(() => {
-      if (gdToken && !document.hidden) gdSync();
-    }, 30000);
-
-    function gdUpdateLoginBtn(connected) {
-      const loginBtn = document.getElementById("gdLoginBtn");
-      if (loginBtn) loginBtn.style.display = connected ? "none" : "";
+    // ── Login: redirige a Google (flujo más robusto que popup) ──
+    function gdLogin() {
+      const params = new URLSearchParams({
+        client_id:     GD_CLIENT_ID,
+        redirect_uri:  GD_REDIRECT,
+        response_type: "token",
+        scope:         GD_SCOPE,
+        prompt:        "select_account"
+      });
+      window.location.href =
+        `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
     }
 
+    // ── Reauth silencioso (popup invisible, renueva token sin molestar) ──
+    function gdSilentReauth() {
+      return new Promise((resolve) => {
+        const params = new URLSearchParams({
+          client_id:     GD_CLIENT_ID,
+          redirect_uri:  GD_REDIRECT,
+          response_type: "token",
+          scope:         GD_SCOPE,
+          prompt:        "none"
+        });
+        const popup = window.open(
+          `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
+          "_blank",
+          "width=1,height=1,left=-9999,top=-9999"
+        );
+        const tid = setTimeout(() => {
+          try { popup && popup.close(); } catch(_) {}
+          window.removeEventListener("message", onMsg);
+          resolve(false);
+        }, 10000);
+        function onMsg(e) {
+          if (e.origin !== "https://rubenpesoa.github.io") return;
+          clearTimeout(tid);
+          window.removeEventListener("message", onMsg);
+          if (e.data?.type === "gd_token") { gdSetToken(e.data.token); resolve(true); }
+          else resolve(false);
+        }
+        window.addEventListener("message", onMsg);
+      });
+    }
+
+    // ── Arranque: manejar callback OAuth o restaurar sesión ──
+    (async function() {
+      // 1. ¿Volvimos de Google OAuth? (token en el hash de la URL)
+      const hp = new URLSearchParams(location.hash.slice(1));
+      const ht = hp.get("access_token");
+      if (ht) {
+        history.replaceState(null, "", location.pathname);
+        gdSetToken(ht);
+        await gdSync();
+        return;
+      }
+      // 2. ¿Token almacenado aún vigente?
+      const stored = localStorage.getItem(GD_TOKEN_KEY);
+      const expiry = parseInt(localStorage.getItem(GD_EXPIRY_KEY) || "0");
+      if (stored && expiry > Date.now()) {
+        gdToken = stored;
+        gdUpdateLoginBtn(true);
+        await gdSync();
+        return;
+      }
+      // 3. Token expirado → mostrar botón ya, intentar reauth silencioso en paralelo
+      gdUpdateLoginBtn(false);
+      if (stored) {
+        const ok = await gdSilentReauth();
+        if (ok) { gdUpdateLoginBtn(true); await gdSync(); }
+      }
+    })();
+
+    // ── popup de reauth silencioso: reenviar token al opener y cerrar ──
+    // (Este código también corre en el popup; si hay opener, envía y cierra)
+    (function() {
+      const hp = new URLSearchParams(location.hash.slice(1));
+      const ht = hp.get("access_token");
+      const er = hp.get("error");
+      if (window.opener && (ht || er)) {
+        window.opener.postMessage(
+          ht ? { type: "gd_token", token: ht } : { type: "gd_token_error", error: er },
+          "https://rubenpesoa.github.io"
+        );
+        window.close();
+      }
+    })();
+
+    // ── API Drive ─────────────────────────────────────────
     async function gdFetch(url, opts = {}) {
       const res = await fetch(url, {
         ...opts,
@@ -869,13 +846,13 @@
         gdToken = null;
         localStorage.removeItem(GD_TOKEN_KEY);
         localStorage.removeItem(GD_EXPIRY_KEY);
-        gdSilentReauth().then(ok => { if (!ok) gdUpdateLoginBtn(false); });
+        gdUpdateLoginBtn(false);
         throw new Error("Token expirado");
       }
       return res;
     }
 
-    // Cargar notas desde Drive (Drive gana sobre local si el archivo ya existe)
+    // Sincroniza: Drive gana sobre local si el archivo existe
     async function gdSync() {
       try {
         gdSetSyncState("saving");
@@ -898,7 +875,7 @@
       } catch(e) { console.warn("gdSync error:", e); gdSetSyncState("synced"); }
     }
 
-    // Guardar notas en Drive
+    // Guarda notas en Drive
     async function gdSave() {
       if (!gdToken) return;
       try {
@@ -927,14 +904,24 @@
       } catch(e) { console.warn("gdSave error:", e); gdSetSyncState("pending"); }
     }
 
-    // Guarda rápido (500ms debounce para no duplicar llamadas en borrados seguidos)
+    // Debounce 500ms para no duplicar requests al borrar varias notas seguidas
     function gdScheduleSave() {
       if (!gdToken) return;
       clearTimeout(gdTimer);
       gdTimer = setTimeout(gdSave, 500);
     }
 
-    document.getElementById("gdLoginBtn").addEventListener("click", gdToggle);
+    // Re-sync al volver a la pestaña
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && gdToken) gdSync();
+    });
+
+    // Polling cada 30s para sincronización entre dispositivos
+    setInterval(() => {
+      if (gdToken && !document.hidden) gdSync();
+    }, 30000);
+
+    document.getElementById("gdLoginBtn").addEventListener("click", gdLogin);
 
     // ── Helpers ────────────────────────────────────────────
     const MONTHS  = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
